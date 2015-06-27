@@ -1,12 +1,11 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"github.com/go-fsnotify/fsnotify"
 	"github.com/gorilla/websocket"
 	"golang.org/x/net/html"
-	"golang.org/x/net/html/atom"
-	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -60,7 +59,6 @@ func (h *handler) inject() {
 		if n.Type == html.ElementNode && n.Data == "body" {
 			// <script> tag
 			tag := &html.Node{}
-			tag.DataAtom = atom.Script
 			tag.Type = html.ElementNode
 			tag.Data = "script"
 
@@ -69,8 +67,8 @@ func (h *handler) inject() {
 				Type: html.TextNode,
 				Data: h.script,
 			}
-			n.AppendChild(tag)
 			tag.AppendChild(c)
+			n.AppendChild(tag)
 
 			return
 		}
@@ -83,9 +81,9 @@ func (h *handler) inject() {
 }
 
 func (h *handler) Write(p []byte) (n int, err error) {
-	tmp := string(p)
-	h.content = tmp
-	return len(p), nil
+	h.content = string(p)
+	fmt.Println(string(p))
+	return len(h.content), nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -98,20 +96,12 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.content = string(content)
 
 	h.inject()
-	io.WriteString(w, h.content)
+	fmt.Fprintf(w, h.content)
 }
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-}
-
-func print_binary(s []byte) {
-	fmt.Printf("Received b:")
-	for n := 0; n < len(s); n++ {
-		fmt.Printf("%d,", s[n])
-	}
-	fmt.Printf("\n")
 }
 
 func (h *handler) reloadHandler(w http.ResponseWriter, r *http.Request) {
@@ -123,14 +113,9 @@ func (h *handler) reloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	for {
 		refresh := <-h.c
-		messageType, p, err := conn.ReadMessage()
-		if err != nil {
-			return
-		}
 
-		print_binary(p)
 		if refresh {
-			err = conn.WriteMessage(messageType, []byte("refresh"))
+			err = conn.WriteMessage(1, []byte("refresh"))
 			if err != nil {
 				return
 			}
@@ -142,26 +127,26 @@ const WSSCRIPT string = `
 	var serversocket = new WebSocket("ws://localhost:3000/ws/echo");
  
     serversocket.onopen = function() {
-            serversocket.send("Connection init");
+        serversocket.send("Connection init");
     }
 
-    // Write message on receive
+    // Reload the page
     serversocket.onmessage = function(e) {
-            document.getElementById('comms').innerHTML += "Received: " + e.data + "<br>";
-            document.location.reload(true);
+    	if (e.data == "refresh") {
+        	document.location.reload(true);
+        }
     };
-
-    function senddata() {
-            var data = document.getElementById('sendtext').value;
-            serversocket.send(data);
-            document.getElementById('comms').innerHTML += "<li>Sent: " + data + "<br></li>";
-    }
 `
 
 func main() {
+	flag.Parse()
+	if flag.NArg() != 1 {
+		log.Fatal("filename not specified")
+	}
+	filename := flag.Args()[0]
 
 	h := &handler{
-		filename: "/tmp/test.html",
+		filename: filename,
 		script:   WSSCRIPT,
 		c:        make(chan bool),
 	}
