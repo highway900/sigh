@@ -10,12 +10,11 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"bytes"
 )
 
 type handler struct {
 	filename string
-	content  string
-	script   string
 	c        chan bool
 }
 
@@ -49,12 +48,21 @@ func (h *handler) watcher(f string) {
 	<-done
 }
 
-func (h *handler) inject() {
-	doc, err := html.Parse(strings.NewReader(h.content))
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Read in index.html
+	// Inject WS script for refresh
+	buf := new(bytes.Buffer)
+	
+	content, err := ioutil.ReadFile(h.filename)
+	if err != nil {
+		panic("Error: " + err.Error())
+	}
+	
+	doc, err := html.Parse(strings.NewReader(string(content)))
 	if err != nil {
 		log.Fatal(err)
 	}
-	var f func(n *html.Node)
+	var f func(*html.Node)
 	f = func(n *html.Node) {
 		if n.Type == html.ElementNode && n.Data == "body" {
 			// <script> tag
@@ -65,7 +73,7 @@ func (h *handler) inject() {
 			// script Content/text
 			c := &html.Node{
 				Type: html.TextNode,
-				Data: h.script,
+				Data: WSSCRIPT,
 			}
 			tag.AppendChild(c)
 			n.AppendChild(tag)
@@ -77,26 +85,9 @@ func (h *handler) inject() {
 		}
 	}
 	f(doc)
-	html.Render(h, doc)
-}
 
-func (h *handler) Write(p []byte) (n int, err error) {
-	h.content = string(p)
-	fmt.Println(string(p))
-	return len(h.content), nil
-}
-
-func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Read in index.html
-	// Inject WS script for refresh
-	content, err := ioutil.ReadFile(h.filename)
-	if err != nil {
-		panic("Error: " + err.Error())
-	}
-	h.content = string(content)
-
-	h.inject()
-	fmt.Fprintf(w, h.content)
+	html.Render(buf, doc)
+	fmt.Fprintf(w, buf.String())
 }
 
 var upgrader = websocket.Upgrader{
@@ -126,16 +117,16 @@ func (h *handler) reloadHandler(w http.ResponseWriter, r *http.Request) {
 const WSSCRIPT string = `
 	var serversocket = new WebSocket("ws://localhost:3000/ws/echo");
  
-    serversocket.onopen = function() {
-        serversocket.send("Connection init");
-    }
+	serversocket.onopen = function() {
+		serversocket.send("Connection init");
+	}
 
-    // Reload the page
-    serversocket.onmessage = function(e) {
-    	if (e.data == "refresh") {
-        	document.location.reload(true);
-        }
-    };
+	// Reload the page
+	serversocket.onmessage = function(e) {
+		if (e.data == "refresh") {
+			document.location.reload(true);
+		}
+	};
 `
 
 func main() {
@@ -147,7 +138,6 @@ func main() {
 
 	h := &handler{
 		filename: filename,
-		script:   WSSCRIPT,
 		c:        make(chan bool),
 	}
 
